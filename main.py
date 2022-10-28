@@ -1,9 +1,21 @@
+#   __                                          _
+#  /  )       / ' _  _ _/ _   ' _   _  _  _   /_ '    _/ _  _
+# /(_/ (/ /) ( / (  (/ / (-  / //) (/ (/ (-  /  / /) (/ (- /
+#        /                           _/
+
+"""Duplicate image finder
+
+Made by Leonid (https://github.com/G4m3-80ft)"""
+
 import os
 import shutil
+from itertools import chain
 from tkinter import IntVar, StringVar
 from tkinter import Tk, Toplevel, Frame, Label, Entry, Menubutton, Menu, Button
+from tkinter.font import Font
 from tkinter.ttk import Progressbar
 from tkinter.messagebox import showerror, showinfo
+from tkinter.filedialog import askdirectory
 
 import PIL
 from PIL import Image, ImageChops
@@ -19,27 +31,30 @@ def validate_path(entry, path) -> bool:
 
 
 class LoadingWindow:
-    def __init__(self, title: str = 'Loading...', size: int = 100):
+    def __init__(self, title: str = 'Loading...', *, size: int = 100, determinate: bool = False):
         self.root: Toplevel = Toplevel()
         self.root.title(title)
-        self.root.geometry('250x125')
+        self.root.geometry('400x125')
 
         for i in range(4):
             self.root.rowconfigure(i, weight=1)
             if i != 3:
                 self.root.columnconfigure(i, weight=1)
 
+        self.current_task: StringVar = StringVar()
+        self.current_task.set(title)
         Label(
             self.root,
-            text=title,
+            textvariable=self.current_task,
             justify='left'
         ).grid(row=1, column=1,
                sticky='w')
 
+        # noinspection PyTypeChecker
         self.pb: Progressbar = Progressbar(
             self.root,
             maximum=size,
-            mode='indeterminate'
+            mode='determinate' if determinate else 'indeterminate'
         )
         self.pb.grid(row=2, column=1,
                      sticky='ew')
@@ -53,9 +68,9 @@ class LoadingWindow:
 
 class Root:
     def __init__(self):
-        self.images: list = []
-        self.selected: list = []
-        self.min_res: int = 0
+        # noinspection PyTypeChecker
+        self.image_resolutions: dict[str, tuple[int, int]] = {}
+        self.selected: list[str] = []
 
         self.root: Tk = Tk()
         self.root.title('Duplicated image finder')
@@ -68,7 +83,8 @@ class Root:
             relief='ridge',
             bd=5
         )
-        frame.grid(sticky='nesw')
+        frame.grid(row=0, column=0,
+                   sticky='nesw')
 
         for i in range(3):
             frame.columnconfigure(i, weight=1)
@@ -83,22 +99,48 @@ class Root:
         ).grid(row=line_num, column=1,
                sticky='sw')
 
-        line_num += 1
-        self.sp: Entry = Entry(
-            frame,
-            validate='key'
-        )
-        self.sp['validatecommand'] = self.root.register(lambda path, ew=self.sp: validate_path(ew, path)), '%P'
-        self.sp.grid(row=line_num, column=1,
-                     sticky='nwe')
-        self.sp.bind('<Return>', self.fast_scan)
-
         Button(
             frame,
-            text='Fast scan',
-            command=self.fast_scan,
-        ).grid(row=line_num - 1, column=1,
+            text='Scan resolutions',
+            command=self.scan_resolutions,
+        ).grid(row=line_num, column=1,
                sticky='se')
+
+        line_num += 1
+        path_frame: Frame = Frame(
+            frame
+        )
+        path_frame.grid(row=line_num, column=1,
+                        sticky='new')
+        for i in range(2):
+            path_frame.columnconfigure(i, weight=1 - i)
+
+        scan_path: StringVar = StringVar()
+        self.scan_entry: Entry = Entry(
+            path_frame,
+            validate='key',
+            textvariable=scan_path
+        )
+        self.scan_entry['validatecommand'] = self.root.register(
+            lambda path, ew=self.scan_entry: validate_path(ew, path)
+        ), '%P'
+        self.scan_entry.grid(column=0,
+                             sticky='nesw')
+        self.scan_entry.bind('<Return>', self.scan_resolutions)
+        Button(
+            path_frame,
+            text='Browse',
+            command=lambda: scan_path.set(
+                os.path.normpath(d) if (
+                    d := askdirectory(
+                        title='Choose path to scan',
+                        initialdir=self.scan_entry.get()
+                    )
+                )
+                else scan_path.get()
+            )
+        ).grid(row=0, column=1,
+               sticky='e')
 
         line_num += 1
         Label(
@@ -117,15 +159,15 @@ class Root:
             validatecommand=(self.root.register(lambda res: res.isdigit() if res else True), '%P')
         )
         self.se.grid(row=line_num, column=1,
-                     sticky='nwe')
-        self.se.bind('<Return>', self.scan)
+                     sticky='new')
+        self.se.bind('<Return>', self.scan_duplicates)
 
         Button(
             frame,
-            text='Scan',
-            command=self.scan,
+            text='Scan duplicates',
+            command=self.scan_duplicates,
         ).grid(row=line_num - 1, column=1,
-               sticky='se')
+               sticky='es')
 
         line_num += 1
         self.mb: Menubutton = Menubutton(
@@ -134,45 +176,78 @@ class Root:
             relief='raised'
         )
         self.mb.grid(row=line_num, column=1,
-                     sticky='we')
+                     sticky='ew')
 
         self.duplicate_images: StringVar = StringVar()
 
         line_num += 1
         Label(
             frame,
-            text='Path to export selected images'
+            text='Path to export selected'
         ).grid(row=line_num, column=1,
                sticky='sw')
-
-        line_num += 1
-        self.export: StringVar = StringVar()
-        ep = Entry(
-            frame,
-            validate='key',
-            textvariable=self.export
-        )
-        ep['validatecommand'] = self.root.register(
-            lambda path, ew=ep:
-            validate_path(ew, path) if not path.endswith('Better images')
-            else validate_path(ew, path.replace('Better images', ''))
-        ), '%P'
-        ep.grid(row=line_num, column=1,
-                sticky='nwe')
-        ep.bind('<Return>', self.export_selected)
-
         Button(
             frame,
             text='Export selected',
             command=self.export_selected,
-        ).grid(row=line_num - 1, column=1,
+        ).grid(row=line_num, column=1,
+               sticky='es')
+
+        line_num += 1
+        path_frame: Frame = Frame(
+            frame
+        )
+        path_frame.grid(row=line_num, column=1,
+                        sticky='new')
+        for i in range(2):
+            path_frame.columnconfigure(i, weight=1 - i)
+
+        self.export: StringVar = StringVar()
+        export_entry = Entry(
+            path_frame,
+            validate='key',
+            textvariable=self.export
+        )
+        export_entry['validatecommand'] = self.root.register(
+            lambda path, ew=export_entry:
+            validate_path(ew, path) if not path.endswith('better-images')
+            else validate_path(ew, path.replace('better-images', ''))
+        ), '%P'
+        export_entry.grid(row=0, column=0,
+                          sticky='nesw')
+        export_entry.bind('<Return>', self.export_selected)
+
+        Button(
+            path_frame,
+            text='Browse',
+            command=lambda: self.export.set(
+                os.path.normpath(d) if (
+                    d := askdirectory(
+                        title='Choose export path',
+                        initialdir=self.export.get()
+                    )
+                )
+                else self.export.get()
+            )
+        ).grid(row=0, column=1,
+               sticky='e')
+
+        line_num += 1
+        Label(
+            frame,
+            font=Font(size=7),
+            text='Made by Leonid (https://github.com/G4m3-80ft)',
+            fg='grey',
+            justify='right'
+        ).grid(row=line_num, column=1,
+               columnspan=2,
                sticky='se')
 
-        for i in range(line_num + 2):
+        for i in range(line_num):
             frame.rowconfigure(i, weight=1)
 
-    def fast_scan(self, *_) -> None:
-        scan_path: str = self.sp.get()
+    def scan_resolutions(self, *_) -> None:
+        scan_path: str = self.scan_entry.get()
 
         if not os.access(scan_path, os.R_OK):
             showerror('Error', f'Can\'t read path for scan!')
@@ -181,26 +256,21 @@ class Root:
         if not scan_path.endswith(os.sep):
             scan_path += os.sep
 
-        res: list = []
-
-        self.sp["state"] = 'readonly'
-        export_path: str = scan_path + 'Better images'
+        self.scan_entry["state"] = 'readonly'
+        export_path: str = scan_path + 'better-images'
         self.export.set(export_path)
 
-        w: LoadingWindow = LoadingWindow('Fast scanning', 20)
+        w: LoadingWindow = LoadingWindow('Scanning resolutions', size=20)
 
-        for file in os.listdir(scan_path):
+        for file in filter(lambda p: os.path.isfile(scan_path + p), os.listdir(scan_path)):
             filepath: str = scan_path + file
 
-            if os.path.isdir(filepath):
-                continue
             try:
                 im = Image.open(filepath)
             except PIL.UnidentifiedImageError:
                 continue
 
-            res.append(min(im.size))
-            self.images.append(file)
+            self.image_resolutions[file] = im.size
 
             w.step()
             self.root.update()
@@ -208,52 +278,71 @@ class Root:
 
         w.destroy()
 
-        self.min_res: int = min(res)
+        # noinspection PyTypeChecker
+        min_res: int = min(map(min, self.image_resolutions.values()))
         self.se['state'] = 'normal'
-        self.shrink.set(str(self.min_res))
+        self.shrink.set(str(min_res))
 
         return None
 
-    def scan(self, *_) -> None:
-        duplicate_images: list[list, ...] = [[]]
+    def scan_duplicates(self, *_) -> None:
+        duplicate_images: list[list[str], ...] = [[]]
 
-        scan_path: str = self.sp.get()
-        if not os.path.exists(scan_path):
-            showerror('Error', 'Path for scan does not exist!')
-            return None
+        scan_path: str = self.scan_entry.get()
 
         if not scan_path.endswith(os.sep):
             scan_path += os.sep
 
         if not self.shrink.get():
-            self.shrink.set(str(self.min_res))
+            # noinspection PyTypeChecker
+            self.shrink.set(
+                str(
+                    min(
+                        map(
+                            min,
+                            self.image_resolutions.values()
+                        )
+                    )
+                )
+            )
         res: int = int(self.shrink.get())
         self.se['state'] = 'readonly'
 
-        w: LoadingWindow = LoadingWindow('Scanning', 50)
+        size: int = (len(self.image_resolutions) ** 2 - len(self.image_resolutions)) // 2
+        w: LoadingWindow = LoadingWindow('Scanning duplicates', size=size + 1, determinate=True)
 
-        for i, path1 in enumerate(self.images):
+        for i, path1 in enumerate(self.image_resolutions.keys(), start=1):
             im1: Image.Image = Image.open(scan_path + path1)
-            im1_size: tuple[int, int] = im1.size
+            w.current_task.set(f'Compressing 1st image №{i}...')
+            self.root.update()
             im1.thumbnail((res,) * 2)
-            for path2 in self.images[i + 1:]:
+
+            for j, path2 in enumerate(tuple(self.image_resolutions)[i:], start=1):
+                if path2 in chain.from_iterable(duplicate_images):
+                    continue
+
                 im2: Image.Image = Image.open(scan_path + path2)
-                im2_size: tuple[int, int] = im2.size
+                w.current_task.set(f'Compressing 2nd image №{i + j}...')
+                self.root.update()
                 im2.thumbnail((res,) * 2)
 
+                w.current_task.set(f'Comparing sizes ({i} & {i + j})...')
+                self.root.update()
                 if im1.size == im2.size:
+                    w.current_task.set(f'Comparing colors ({i} & {i + j})...')
+                    self.root.update()
                     im = ImageChops.subtract(im1.convert('L'), im2.convert('L'))
                     im.thumbnail((1, 1))
                     if im.getpixel((0, 0)) == 0:
-                        duplicate_images[-1].append((path2, im2_size))
+                        duplicate_images[-1].append(path2)
+
+                w.step()
+                self.root.update()
+                self.root.update_idletasks()
 
             if duplicate_images[-1]:
-                duplicate_images[-1].insert(0, (path1, im1_size))
+                duplicate_images[-1].insert(0, path1)
                 duplicate_images.append([])
-
-            w.step()
-            self.root.update()
-            self.root.update_idletasks()
 
         if not duplicate_images[-1]:
             duplicate_images.pop()
@@ -262,13 +351,16 @@ class Root:
             self.mb,
             tearoff=False
         )
-        for im in duplicate_images:
-            im.sort(key=lambda x: x[1], reverse=True)
-            sub_images: Menu = Menu(tearoff=False)
-            for path, size in im:
-                check_var: IntVar = IntVar()
 
-                if size == im[0][1]:
+        group_paths: list[str]
+        for group_paths in duplicate_images:
+            group_paths.sort(key=lambda x: self.image_resolutions[x], reverse=True)
+            sub_images: Menu = Menu(tearoff=False)
+            for path in group_paths:
+                check_var: IntVar = IntVar()
+                size: tuple[int, int] = self.image_resolutions[path]
+
+                if path == group_paths[0]:
                     check_var.set(1)
                     self.selected.append(path)
 
@@ -282,10 +374,10 @@ class Root:
                     else None
                 )
 
-            icon = Image.open(scan_path + im[0][0])
+            icon = Image.open(scan_path + group_paths[0])
             icon.thumbnail((50, 50))
             images.add_cascade(
-                label=im[0][0],
+                label=group_paths[0],
                 image=PhotoImage(icon),
                 compound='left',
                 menu=sub_images
@@ -296,34 +388,45 @@ class Root:
             self.root.update_idletasks()
 
         w.destroy()
-        showinfo('Info', 'Scanning is finished.')
+        showinfo(
+            'Info',
+            "Scanning is finished.\n"
+            f"{len(tuple(j for i in duplicate_images for j in i))} duplicates found."
+        )
 
+        # TODO: Do sth with menu being larger than the screen
         self.mb["menu"] = images
 
     def export_selected(self, *_) -> None:
-        scan_path: str = self.sp.get()
+        scan_path: str = self.scan_entry.get()
 
         if not scan_path.endswith(os.sep):
             scan_path += os.sep
 
         export_path: str = self.export.get()
-        if not os.access(export_path, os.W_OK):
-            if os.path.basename(export_path) != 'Better images':
-                showerror('Error', 'Can\'t access export path!')
-                return None
-
-            if not os.access(os.path.dirname(export_path), os.W_OK):
-                showerror('Error', 'Can\'t access export path!')
-                return None
-
-            os.mkdir(export_path)
 
         if not export_path.endswith(os.sep):
             export_path += os.sep
 
-        w: LoadingWindow = LoadingWindow('Exporting', 30)
+        if export_path == scan_path:
+            export_path += 'better-images'
+
+        if not os.access(export_path, os.W_OK):
+            # Slicing off os.sep: https://docs.python.org/3/library/os.path.html#os.path.basename
+            if os.path.basename(export_path[:-1]) != 'better-images':
+                showerror('Error', f'Can\'t access export path!')
+                return None
+
+            if not os.access(os.path.dirname(export_path[:-1]), os.W_OK):
+                showerror('Error', f'Can\'t access export path!')
+                return None
+
+            os.mkdir(export_path)
+
+        w: LoadingWindow = LoadingWindow('Exporting', size=len(self.selected), determinate=True)
 
         for path in self.selected:
+            w.current_task.set(f'Exporting {path}...')
             shutil.copy2(scan_path + path, export_path)
 
             w.step()
