@@ -73,7 +73,7 @@ class Root:
         self.selected: list[str] = []
 
         self.root: Tk = Tk()
-        self.root.title('Duplicated image finder')
+        self.root.title('Duplicate image finder')
         self.root.geometry('500x300')
         self.root.rowconfigure(0, weight=1)
         self.root.columnconfigure(0, weight=1)
@@ -172,7 +172,7 @@ class Root:
         line_num += 1
         self.mb: Menubutton = Menubutton(
             frame,
-            text='Duplicated images',
+            text='Duplicate images',
             relief='raised'
         )
         self.mb.grid(row=line_num, column=1,
@@ -274,7 +274,6 @@ class Root:
 
             w.step()
             self.root.update()
-            self.root.update_idletasks()
 
         w.destroy()
 
@@ -338,7 +337,6 @@ class Root:
 
                 w.step()
                 self.root.update()
-                self.root.update_idletasks()
 
             if duplicate_images[-1]:
                 duplicate_images[-1].insert(0, path1)
@@ -353,7 +351,10 @@ class Root:
         )
 
         group_paths: list[str]
-        for group_paths in duplicate_images:
+        for i, group_paths in enumerate(duplicate_images, start=1):
+            w.current_task.set(f'Adding images... {i}/{len(duplicate_images)}')
+            self.root.update()
+
             group_paths.sort(key=lambda x: self.image_resolutions[x], reverse=True)
             sub_images: Menu = Menu(tearoff=False)
             for path in group_paths:
@@ -385,7 +386,6 @@ class Root:
 
             w.step()
             self.root.update()
-            self.root.update_idletasks()
 
         w.destroy()
         showinfo(
@@ -431,7 +431,6 @@ class Root:
 
             w.step()
             self.root.update()
-            self.root.update_idletasks()
 
         w.destroy()
         showinfo('Info', 'Export finished!')
