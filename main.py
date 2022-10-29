@@ -9,6 +9,9 @@ Made by Leonid (https://github.com/G4m3-80ft)"""
 
 import os
 import shutil
+import logging.handlers
+import sys
+from time import time, asctime, localtime
 from itertools import chain
 from tkinter import IntVar, StringVar
 from tkinter import Tk, Toplevel, Frame, Label, Entry, Menubutton, Menu, Button
@@ -20,6 +23,26 @@ from tkinter.filedialog import askdirectory
 import PIL
 from PIL import Image, ImageChops
 from PIL.ImageTk import PhotoImage
+
+level: int = 10
+START: float = time()
+LOGGER: logging.Logger = logging.getLogger(__name__)
+LOGGER.setLevel(level)
+
+for handler in (
+    logging.StreamHandler(sys.stdout),
+    logging.handlers.RotatingFileHandler('debug.log')
+):
+    handler.setFormatter(
+        logging.Formatter(
+            '[%(levelname)s] [%(asctime)s]: `%(message)s`'
+        )
+    )
+    handler.setLevel(level)
+    LOGGER.addHandler(handler)
+
+LOGGER.debug(f'Program started at {asctime(localtime(START))}')
+LOGGER.debug(f'Logger creation time ({time() - START} s)')
 
 
 def validate_path(entry, path) -> bool:
@@ -68,6 +91,8 @@ class LoadingWindow:
 
 class Root:
     def __init__(self):
+        timer: float = time()
+
         # noinspection PyTypeChecker
         self.image_resolutions: dict[str, tuple[int, int]] = {}
         self.selected: list[str] = []
@@ -246,15 +271,23 @@ class Root:
         for i in range(line_num):
             frame.rowconfigure(i, weight=1)
 
+        LOGGER.debug(
+            f'Total root creation time: {round(time() - timer, 6)} s (from program start: {round(time() - START, 6)} s)'
+        )
+
     def scan_resolutions(self, *_) -> None:
+        LOGGER.debug(f'scan_resolutions function called (from program start: {round(time() - START, 6)} s)')
+        timer: float = time()
         scan_path: str = self.scan_entry.get()
 
         if not os.access(scan_path, os.R_OK):
-            showerror('Error', f'Can\'t read path for scan!')
+            LOGGER.error(f'Can\'t read path "{scan_path}" for scan!')
+            showerror('Error', 'Can\'t read path for scan!')
             return None
 
         if not scan_path.endswith(os.sep):
             scan_path += os.sep
+            LOGGER.debug(f'Added os.sep to path "{scan_path}"')
 
         self.scan_entry["state"] = 'readonly'
         export_path: str = scan_path + 'better-images'
@@ -262,19 +295,27 @@ class Root:
 
         w: LoadingWindow = LoadingWindow('Scanning resolutions', size=20)
 
+        LOGGER.debug(f'Resolution scan start: {round(time() - timer, 6)} s')
+
+        s: float = time()
         for file in filter(lambda p: os.path.isfile(scan_path + p), os.listdir(scan_path)):
             filepath: str = scan_path + file
 
             try:
                 im = Image.open(filepath)
             except PIL.UnidentifiedImageError:
+                LOGGER.debug(f'Skipped ({file}): cannot open with PIL')
                 continue
 
             self.image_resolutions[file] = im.size
 
             w.step()
             self.root.update()
-            self.root.update_idletasks()
+            LOGGER.info(f'Scanned "{file}"')
+
+        LOGGER.debug(
+            f'Resolutions scan time: {round(time() - s, 6)} s (from function call: {round(time() - timer, 6)} s)'
+        )
 
         w.destroy()
 
@@ -283,9 +324,16 @@ class Root:
         self.se['state'] = 'normal'
         self.shrink.set(str(min_res))
 
+        LOGGER.info(f'{len(self.image_resolutions)} images found')
+        LOGGER.debug(
+            f'Total execution time: {round(time() - timer, 6)} s (from program start: {round(time() - START, 6)} s)'
+        )
+
         return None
 
     def scan_duplicates(self, *_) -> None:
+        LOGGER.debug(f'scan_duplicates function called (from program start: {round(time() - START, 6)} s)')
+        timer: float = time()
         duplicate_images: list[list[str], ...] = [[]]
 
         scan_path: str = self.scan_entry.get()
@@ -305,20 +353,36 @@ class Root:
                     )
                 )
             )
+            LOGGER.debug(f'self.shrink isn\'t set, minimum will be used')
+
         res: int = int(self.shrink.get())
         self.se['state'] = 'readonly'
 
         size: int = (len(self.image_resolutions) ** 2 - len(self.image_resolutions)) // 2
         w: LoadingWindow = LoadingWindow('Scanning duplicates', size=size + 1, determinate=True)
 
+        s: float = time()
+        s1: float
+        s2: float
+        s3: float
+
+        LOGGER.debug(f'Scan for duplicates start: {round(time() - timer, 6)} s')
+
         for i, path1 in enumerate(self.image_resolutions.keys(), start=1):
+            s1 = time()
+
             im1: Image.Image = Image.open(scan_path + path1)
             w.current_task.set(f'Compressing 1st image №{i}...')
             self.root.update()
             im1.thumbnail((res,) * 2)
 
+            LOGGER.debug(f'1st image opening and compression time: {round(time() - s1, 6)} s')
+
             for j, path2 in enumerate(tuple(self.image_resolutions)[i:], start=1):
+                s2 = time()
+
                 if path2 in chain.from_iterable(duplicate_images):
+                    LOGGER.debug(f'Skipped {path2}: already in another group')
                     continue
 
                 im2: Image.Image = Image.open(scan_path + path2)
@@ -326,9 +390,13 @@ class Root:
                 self.root.update()
                 im2.thumbnail((res,) * 2)
 
+                LOGGER.debug(f'2nd image opening and compressing time: {round(time() - s2, 6)} s')
+
                 w.current_task.set(f'Comparing sizes ({i} & {i + j})...')
                 self.root.update()
                 if im1.size == im2.size:
+                    s3 = time()
+
                     w.current_task.set(f'Comparing colors ({i} & {i + j})...')
                     self.root.update()
                     im = ImageChops.subtract(im1.convert('L'), im2.convert('L'))
@@ -336,26 +404,42 @@ class Root:
                     if im.getpixel((0, 0)) == 0:
                         duplicate_images[-1].append(path2)
 
+                    LOGGER.debug(f'Colors comparison time: {round(time() - s3, 6)} s')
+
                 w.step()
                 self.root.update()
-                self.root.update_idletasks()
+                LOGGER.debug(f'Inner cycle time: {round(time() - s2, 6)} s')
 
             if duplicate_images[-1]:
                 duplicate_images[-1].insert(0, path1)
                 duplicate_images.append([])
 
+            LOGGER.debug(f'Outer cycle time: {round(time() - s1, 6)} s')
+
+        LOGGER.debug(
+            f'Scan for duplicates time: {round(time() - s, 6)} s (from function call: {round(time() - timer, 6)} s)'
+        )
+        LOGGER.info(f'{len(duplicate_images)} images found')
+
         if not duplicate_images[-1]:
             duplicate_images.pop()
+            LOGGER.debug(f'Last item from duplicate_images removed: it\'s empty')
 
         images: Menu = Menu(
             self.mb,
             tearoff=False
         )
 
+        s = time()
         group_paths: list[str]
-        for group_paths in duplicate_images:
+        for i, group_paths in enumerate(duplicate_images, start=1):
+            LOGGER.info(f'Adding images... {i}/{len(duplicate_images)}')
+            w.current_task.set(f'Adding images... {i}/{len(duplicate_images)}')
+            self.root.update()
+
             group_paths.sort(key=lambda x: self.image_resolutions[x], reverse=True)
             sub_images: Menu = Menu(tearoff=False)
+
             for path in group_paths:
                 check_var: IntVar = IntVar()
                 size: tuple[int, int] = self.image_resolutions[path]
@@ -385,7 +469,10 @@ class Root:
 
             w.step()
             self.root.update()
-            self.root.update_idletasks()
+
+        LOGGER.debug(
+            f'Images addition time: {round(time() - s, 6)} s (from function call: {round(time() - timer, 6)} s)'
+        )
 
         w.destroy()
         showinfo(
@@ -397,7 +484,14 @@ class Root:
         # TODO: Do sth with menu being larger than the screen
         self.mb["menu"] = images
 
+        LOGGER.debug(
+            f'Total execution time: {round(time() - timer, 6)} s (from program start: {round(time() - START, 6)} s)'
+        )
+
     def export_selected(self, *_) -> None:
+        LOGGER.debug(f'export_selection function called (from program start: {round(time() - START, 6)} s)')
+        timer: float = time()
+
         scan_path: str = self.scan_entry.get()
 
         if not scan_path.endswith(os.sep):
@@ -414,27 +508,42 @@ class Root:
         if not os.access(export_path, os.W_OK):
             # Slicing off os.sep: https://docs.python.org/3/library/os.path.html#os.path.basename
             if os.path.basename(export_path[:-1]) != 'better-images':
+                LOGGER.error(f'Can\'t access path {export_path} (not .endswith("better images"))')
                 showerror('Error', f'Can\'t access export path!')
                 return None
 
             if not os.access(os.path.dirname(export_path[:-1]), os.W_OK):
+                LOGGER.error(f'Can\'t access path {export_path} (.endswith("better images"))')
                 showerror('Error', f'Can\'t access export path!')
                 return None
 
             os.mkdir(export_path)
+            LOGGER.info(f'Created {export_path}')
 
         w: LoadingWindow = LoadingWindow('Exporting', size=len(self.selected), determinate=True)
 
+        LOGGER.debug(f'Export start: {round(time() - timer, 6)} s')
+
         for path in self.selected:
+            LOGGER.info(f'Exporting {path}...')
             w.current_task.set(f'Exporting {path}...')
             shutil.copy2(scan_path + path, export_path)
 
             w.step()
             self.root.update()
-            self.root.update_idletasks()
+
+        LOGGER.debug(f'Export time: {round(time() - timer, 6)} s')
 
         w.destroy()
+        LOGGER.info(f'Export finished!')
         showinfo('Info', 'Export finished!')
+
+        self.scan_entry["state"] = 'normal'
+        self.se["state"] = 'normal'
+
+        LOGGER.debug(
+            f'Total execution time: {round(time() - timer, 6)} s (from program start: {round(time() - START, 6)} s)'
+        )
 
 
 Root().root.mainloop()
