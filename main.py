@@ -12,10 +12,10 @@ import shutil
 from itertools import chain
 from tkinter import IntVar, StringVar
 from tkinter import Tk, Toplevel, Frame, Label, Entry, Menubutton, Menu, Button
-from tkinter.font import Font
-from tkinter.ttk import Progressbar
-from tkinter.messagebox import showerror, showinfo
 from tkinter.filedialog import askdirectory
+from tkinter.font import Font
+from tkinter.messagebox import showerror, showinfo
+from tkinter.ttk import Progressbar
 
 import PIL
 from PIL import Image, ImageChops
@@ -307,40 +307,45 @@ class Root:
         res: int = int(self.shrink.get())
         self.se['state'] = 'readonly'
 
-        size: int = (len(self.image_resolutions) ** 2 - len(self.image_resolutions)) // 2
+        size: int = len(self.image_resolutions)
+        w: LoadingWindow = LoadingWindow('Compressing images', size=size + 1, determinate=True)
+
+        compressed_images: dict[str, tuple[Image.Image, tuple[int, int]]] = {}
+        for i, path in enumerate(self.image_resolutions.keys(), start=1):
+            im: Image.Image = Image.open(scan_path + path)
+            compressed_images[path] = im.copy().convert('L'), im.size
+            compressed_images[path][0].thumbnail((res,) * 2)
+            w.current_task.set(f'Compressing image {i}/{size}...')
+            w.step()
+            self.root.update()
+
+        w.destroy()
         w: LoadingWindow = LoadingWindow('Scanning duplicates', size=size + 1, determinate=True)
 
         for i, path1 in enumerate(self.image_resolutions.keys(), start=1):
-            im1: Image.Image = Image.open(scan_path + path1)
-            w.current_task.set(f'Compressing 1st image №{i}...')
-            self.root.update()
-            im1.thumbnail((res,) * 2)
+            im1: Image.Image = compressed_images[path1][0]
 
-            for j, path2 in enumerate(tuple(self.image_resolutions)[i:], start=1):
+            for j, path2 in enumerate(self.image_resolutions.keys(), start=1):
+                if j <= i:
+                    continue
+
                 if path2 in chain.from_iterable(duplicate_images):
                     continue
 
-                im2: Image.Image = Image.open(scan_path + path2)
-                w.current_task.set(f'Compressing 2nd image №{i + j}...')
+                im2: Image.Image = compressed_images[path2][0]
+                w.current_task.set(f'Comparing {i} & {j}/{size}...')
                 self.root.update()
-                im2.thumbnail((res,) * 2)
-
-                w.current_task.set(f'Comparing sizes ({i} & {i + j})...')
-                self.root.update()
-                if im1.size == im2.size:
-                    w.current_task.set(f'Comparing colors ({i} & {i + j})...')
-                    self.root.update()
-                    im = ImageChops.subtract(im1.convert('L'), im2.convert('L'))
-                    im.thumbnail((1, 1))
-                    if im.getpixel((0, 0)) == 0:
+                if compressed_images[path1][1] == compressed_images[path2][1]:
+                    im = ImageChops.subtract(im1, im2)
+                    if im.getbbox() is None:
                         duplicate_images[-1].append(path2)
-
-                w.step()
-                self.root.update()
 
             if duplicate_images[-1]:
                 duplicate_images[-1].insert(0, path1)
                 duplicate_images.append([])
+
+            w.step()
+            self.root.update()
 
         if not duplicate_images[-1]:
             duplicate_images.pop()
